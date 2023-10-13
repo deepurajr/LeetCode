@@ -17,15 +17,34 @@ class MkdocsWriter:
   def __init__(self, argv: List[str]):
     self.records: List[dict[str, str]] = sheet.get_all_records()
     self.session: Session = requests.Session()
-    json_data = json.loads(self.session.get(
-        "https://leetcode.com/api/problems/all",
-        timeout=10,
-    ).content.decode("utf-8"))
-    self.user_data = Metadata.from_dict(json_data)
-    self.stat_status_pairs = self.user_data.stat_status_pairs
+    self.all_problems = self._get_problems('all')
+    self.stat_status_pairs = self.all_problems.stat_status_pairs
     self.stat_status_pairs.sort(key=lambda x: x.stat.frontend_question_id)
     self.sols_path = "main/solutions/"
     self.problems_path = "mkdocs/docs/problems/"
+
+    # Query categories to differentiate each problem.
+    algorithms_problems = self._get_problems('algorithms')
+    sql_problems = self._get_problems('database')
+    js_problems = self._get_problems('javascript')
+    shell_problems = self._get_problems('shell')
+    concurrency_problems = self._get_problems('concurrency')
+
+    self.algorithms_problems_set = set(
+        pair.stat.frontend_question_id
+        for pair in algorithms_problems.stat_status_pairs)
+    self.sql_problems_set = set(
+        pair.stat.frontend_question_id
+        for pair in sql_problems.stat_status_pairs)
+    self.js_problems_set = set(
+        pair.stat.frontend_question_id
+        for pair in js_problems.stat_status_pairs)
+    self.shell_problems_set = set(
+        pair.stat.frontend_question_id
+        for pair in shell_problems.stat_status_pairs)
+    self.concurrency_problems_set = set(
+        pair.stat.frontend_question_id
+        for pair in concurrency_problems.stat_status_pairs)
 
     if len(argv) == 2 and argv[1] == '--mock':
       self.stat_status_pairs = self.stat_status_pairs[:2]
@@ -33,6 +52,14 @@ class MkdocsWriter:
 
     if not os.path.exists(self.problems_path):
       os.makedirs(self.problems_path)
+
+  def _get_problems(self, topic: str) -> Metadata:
+    json_data = json.loads(self.session.get(
+        f"https://leetcode.com/api/problems/{topic}",
+        timeout=10,
+    ).content.decode("utf-8"))
+    user_data = Metadata.from_dict(json_data)
+    return user_data
 
   def write_mkdocs(self) -> None:
     with open("mkdocs/mkdocs.yml", "a+") as f:
@@ -69,35 +96,49 @@ class MkdocsWriter:
       if not matches:
         return
       self._write_codes(
-          f, self.records[frontend_question_id - 1], filled_question_id, matches[0])
+          f, self.records[frontend_question_id - 1], frontend_question_id, filled_question_id, matches[0])
 
   def _write(self, f: TextIO, s: str) -> None:
     f.write(s)
     f.write('\n\n')
 
-  def _write_codes(self, f: TextIO, gsheet_record: Any, filled_question_id: str,
-                   path: str) -> None:
-    time_complexities: List[str] = gsheet_record["Time"].split("; ")
-    space_complexities: List[str] = gsheet_record["Space"].split("; ")
+  def _write_codes(self, f: TextIO, gsheet_record: Any,
+                   frontend_question_id: int, filled_question_id: str, path: str) -> None:
     ways: List[str] = gsheet_record["Ways"].split("; ")
-    if len(ways) > 1:
-      # For each way to solve this problem
-      approach_index = 1
-      for way, time_complexity, space_complexity in zip(
-              ways, time_complexities, space_complexities):
-        f.write(f"## Approach {approach_index}: {way}\n\n")
-        f.write(f"- [x] **Time:** {time_complexity}\n")
-        f.write(f"- [x] **Space:** {space_complexity}\n")
+    if frontend_question_id in self.algorithms_problems_set:
+      time_complexities: List[str] = gsheet_record["Time"].split("; ")
+      space_complexities: List[str] = gsheet_record["Space"].split("; ")
+      if len(ways) > 1:
+        # For each way to solve this problem
+        approach_index = 1
+        for way, time_complexity, space_complexity in zip(
+                ways, time_complexities, space_complexities):
+          f.write(f"## Approach {approach_index}: {way}\n\n")
+          f.write(f"- [x] **Time:** {time_complexity}\n")
+          f.write(f"- [x] **Space:** {space_complexity}\n")
+          f.write("\n")
+          self._write_code(f, filled_question_id, path, approach_index)
+          approach_index += 1
+      else:
+        if time_complexities:
+          f.write(f"- [x] **Time:** {time_complexities[0]}\n")
+        if space_complexities:
+          f.write(f"- [x] **Space:** {space_complexities[0]}\n")
         f.write("\n")
-        self._write_code(f, filled_question_id, path, approach_index)
-        approach_index += 1
+        self._write_code(f, filled_question_id, path, 1)
     else:
-      if time_complexities:
-        f.write(f"- [x] **Time:** {time_complexities[0]}\n")
-      if space_complexities:
-        f.write(f"- [x] **Space:** {space_complexities[0]}\n")
-      f.write("\n")
-      self._write_code(f, filled_question_id, path, 1)
+      print('I am here.')
+      if len(ways) > 1:
+        # For each way to solve this problem
+        approach_index = 1
+        for way in ways:
+          f.write(f"## Approach {approach_index}: {way}\n\n")
+          f.write("\n")
+          self._write_code(f, filled_question_id, path, approach_index)
+          approach_index += 1
+      else:
+        f.write("\n")
+        self._write_code(f, filled_question_id, path, 1)
 
   def _write_code(self, f: TextIO, filled_question_id: str, problem_path: str,
                   approach_index: int) -> None:
@@ -105,6 +146,8 @@ class MkdocsWriter:
         ("cpp", "cpp", "C++"),
         ("java", "java", "Java"),
         ("py", "python", "Python"),
+        ("sql", "sql", "SQL"),
+        ("ts", "typescript", "TypeScript"),
     ]:
       suffix: str = "" if approach_index == 1 else f"-{approach_index}"
       code_file_dir = f"{problem_path}/{filled_question_id}{suffix}.{extension}"
